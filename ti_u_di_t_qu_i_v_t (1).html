@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tiêu Diệt Quái Vật</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #22c55e;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        
+        .character {
+            transition: left 0.8s linear, top 0.8s linear;
+            z-index: 10;
+        }
+
+        .monster {
+            animation: float 2s ease-in-out infinite;
+            cursor: pointer;
+            z-index: 5;
+            user-select: none;
+        }
+
+        @keyframes float {
+            0% { transform: translateY(0px) scale(1); }
+            50% { transform: translateY(-10px) scale(1.1); }
+            100% { transform: translateY(0px) scale(1); }
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555; 
+        }
+
+        .modal-overlay {
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Cấu hình Chủ đề & Hình ảnh ---
+        const THEMES = {
+            1: {
+                name: "Vùng đất tri thức (Mặc định)",
+                map: "https://i.ibb.co/S714sRC9/f10b5969-3d89-46aa-a723-0d1d78a5b33a.png",
+                char: "https://i.ibb.co/5XBg1p9X/3b9d5408-d1fc-4685-96ec-f10d92045680.png"
+            },
+            2: {
+                name: "Khám phá khu vực kỳ thú",
+                map: "https://i.ibb.co/VYygJfdQ/23c21788-1390-485e-ba7e-8b1c325a7c72.png",
+                char: "https://i.ibb.co/YBFB9chM/49d3f9a8-b0bd-4b15-abdd-3e1294bd424d.png"
+            },
+            3: {
+                name: "Khám phá thành phố",
+                map: "https://i.ibb.co/whqVmgk6/0b258313-d426-428e-abf7-ed15e0c17151.png",
+                char: "https://i.ibb.co/ZRZRKMqs/f1003912-e375-46d1-a15d-d39c766b24cd.png"
+            }
+        };
+
+        // Danh sách Emoji quái vật ngẫu nhiên
+        const MONSTER_EMOJIS = ['👽', '👿', '👹', '👺', '🧟‍♀️', '🧟‍♂️', '🧟', '🕷️', '🦂', '🧌', '🎃', '🧝🏻', '🧜🏻‍♀️', '🧜🏻‍♂️', '🧝🏻‍♀️', '🧝🏻‍♂️', '🧛🏻‍♀️', '🧙🏻', '🧙🏻‍♂️', '🦹🏻‍♀️', '🧚🏻‍♀️', '🧚🏻‍♂️', '🧚🏻', '🥷🏻', '🪳', '🦟', '🪰', '🪱', '🦇', '🦉', '🐦‍⬛', '🐆'];
+
+        // Mức thời gian (giây)
+        const TIME_LIMITS = [5, 10, 15, 20, 30, 35, 60, 300]; 
+
+        // Trò chơi mẫu ban đầu
+        const SAMPLE_GAME = {
+            id: 'sample-1',
+            title: "Trò chơi mẫu: Vùng đất tri thức",
+            themeId: 1,
+            isSample: true,
+            questions: [
+                { id: 1, type: 'trac_nghiem', text: "Đâu là tên trò chơi này?", options: ['Bắn súng', 'Tiêu diệt quái vật', 'Đua xe', 'Xếp hình'], correct: 1, timeLimit: 15 },
+                { id: 2, type: 'tu_luan', text: "Hành tinh nào gần Mặt Trời nhất?", answer: "Sao Thủy", hint: "Tên một nguyên tố hóa học dạng lỏng ở nhiệt độ thường", timeLimit: 30 },
+                { id: 3, type: 'trac_nghiem', text: "2 + 2 = ?", options: ['3', '4', '5', '6'], correct: 1, timeLimit: 10 }
+            ]
+        };
+
+        // --- Hệ thống Âm thanh Web Audio API ---
+        class SoundFX {
+            constructor() {
+                this.ctx = null;
+                this.muted = false;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            playClick() {
+                if (this.muted) return;
+                this.init();
+                try {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(400, this.ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(800, this.ctx.currentTime + 0.08);
+                    gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start();
+                    osc.stop(this.ctx.currentTime + 0.08);
+                } catch(e) {}
+            }
+
+            playAttack() {
+                if (this.muted) return;
+                this.init();
+                try {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+                    osc.frequency.linearRampToValueAtTime(40, this.ctx.currentTime + 0.25);
+                    gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.25);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start();
+                    osc.stop(this.ctx.currentTime + 0.25);
+                } catch(e) {}
+            }
+
+            playCorrect() {
+                if (this.muted) return;
+                this.init();
+                try {
+                    const now = this.ctx.currentTime;
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(523.25, now); // C5
+                    osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
+                    osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
+                    gain.gain.setValueAtTime(0.15, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start();
+                    osc.stop(now + 0.4);
+                } catch(e) {}
+            }
+
+            playWrong() {
+                if (this.muted) return;
+                this.init();
+                try {
+                    const now = this.ctx.currentTime;
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(180, now);
+                    osc.frequency.linearRampToValueAtTime(110, now + 0.3);
+                    gain.gain.setValueAtTime(0.2, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start();
+                    osc.stop(now + 0.3);
+                } catch(e) {}
+            }
+
+            playWin() {
+                if (this.muted) return;
+                this.init();
+                try {
+                    const now = this.ctx.currentTime;
+                    const notes = [440, 554.37, 659.25, 880]; // A chord
+                    notes.forEach((freq, idx) => {
+                        const osc = this.ctx.createOscillator();
+                        const gain = this.ctx.createGain();
+                        osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+                        gain.gain.setValueAtTime(0.15, now + idx * 0.12);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.12 + 0.4);
+                        osc.connect(gain);
+                        gain.connect(this.ctx.destination);
+                        osc.start(now + idx * 0.12);
+                        osc.stop(now + idx * 0.12 + 0.4);
+                    });
+                } catch(e) {}
+            }
+        }
+
+        const soundManager = new SoundFX();
+
+        // --- Các Icon SVG ---
+        const Icons = {
+            Sword: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/><line x1="13" y1="19" x2="19" y2="13"/><line x1="16" y1="16" x2="20" y2="20"/><line x1="19" y1="21" x2="21" y2="19"/></svg>,
+            Plus: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+            Book: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>,
+            Home: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+            Play: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>,
+            Check: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+            X: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+        };
+
+        const generateAIHint = (question) => {
+            const keywords = question.toLowerCase().split(' ').filter(w => w.length > 3);
+            if(keywords.length > 0) {
+                return `Gợi ý từ AI: Hãy liên tưởng đến từ khóa "${keywords[0]}" hoặc "${keywords[1] || keywords[0]}".`;
+            }
+            return "Gợi ý từ AI: Hãy đọc kỹ câu hỏi và suy nghĩ về ngữ cảnh của nó.";
+        };
+
+        const CreateGameView = ({ onSave }) => {
+            const [title, setTitle] = useState('');
+            const [themeId, setThemeId] = useState(1);
+            const [questions, setQuestions] = useState([]);
+            
+            const [tab, setTab] = useState('manual');
+            
+            const [qType, setQType] = useState('trac_nghiem');
+            const [qText, setQText] = useState('');
+            const [options, setOptions] = useState(['', '', '', '']);
+            const [correctOpt, setCorrectOpt] = useState(0);
+            const [qAnswer, setQAnswer] = useState('');
+            const [qHint, setQHint] = useState('');
+            const [qTime, setQTime] = useState(15);
+
+            const [bulkText, setBulkText] = useState('');
+            const [bulkError, setBulkError] = useState('');
+            const [showBank, setShowBank] = useState(false);
+
+            const handleAddManual = () => {
+                soundManager.playClick();
+                if (!qText.trim()) return alert("Vui lòng nhập câu hỏi!");
+                
+                let newQ = { id: Date.now(), type: qType, text: qText, timeLimit: qTime };
+                
+                if (qType === 'trac_nghiem') {
+                    if (options.some(opt => !opt.trim())) return alert("Vui lòng nhập đủ 4 đáp án!");
+                    newQ.options = [...options];
+                    newQ.correct = correctOpt;
+                } else {
+                    if (!qAnswer.trim()) return alert("Vui lòng nhập đáp án!");
+                    newQ.answer = qAnswer;
+                    newQ.hint = qHint.trim() ? qHint : generateAIHint(qText);
+                }
+
+                setQuestions([...questions, newQ]);
+                setQText('');
+                setOptions(['', '', '', '']);
+                setQAnswer('');
+                setQHint('');
+            };
+
+            const handleAddBulk = () => {
+                soundManager.playClick();
+                if(!bulkText.trim()) return;
+                const lines = bulkText.split('\n');
+                let addedCount = 0;
+                let newQs = [];
+
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if(!line) continue;
+                    
+                    const parts = line.split('|').map(p => p.trim());
+                    if (parts.length === 5) {
+                        let correctIdx = 0;
+                        const parsedOptions = parts.slice(1).map((opt, idx) => {
+                            if (opt.includes('#')) {
+                                correctIdx = idx;
+                                return opt.replace('#', '').trim();
+                            }
+                            return opt;
+                        });
+                        
+                        newQs.push({
+                            id: Date.now() + i,
+                            type: 'trac_nghiem',
+                            text: parts[0],
+                            options: parsedOptions,
+                            correct: correctIdx,
+                            timeLimit: 15
+                        });
+                        addedCount++;
+                    } else {
+                        setBulkError(`Lỗi ở dòng ${i+1}: Cú pháp không đúng (Cần 5 phần cách nhau bởi dấu |)`);
+                        return;
+                    }
+                }
+
+                if(addedCount > 0) {
+                    setQuestions([...questions, ...newQs]);
+                    setBulkText('');
+                    setBulkError('');
+                    alert(`Đã thêm thành công ${addedCount} câu hỏi!`);
+                }
+            };
+
+            const handleSave = () => {
+                soundManager.playClick();
+                if(!title.trim()) return alert("Vui lòng nhập tên trò chơi!");
+                if(questions.length === 0) return alert("Vui lòng thêm ít nhất 1 câu hỏi!");
+                
+                onSave({
+                    id: 'game-' + Date.now(),
+                    title: title,
+                    themeId: Number(themeId),
+                    questions: questions,
+                    isSample: false
+                });
+            };
+
+            return (
+                <div className="flex flex-col h-full bg-slate-50 p-6 rounded-2xl overflow-y-auto">
+                    <h2 className="text-3xl font-bold text-slate-800 mb-6 flex items-center gap-3">
+                        <Icons.Plus /> Tạo Trò Chơi Mới
+                    </h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div>
+                            <label className="block text-sm font-semibold text-slate-700 mb-2">Tên trò chơi:</label>
+                            <input type="text" value={title} onChange={(e) => setTitle(e.target.value)}
+                                placeholder="Nhập tên trò chơi..." 
+                                className="w-full p-4 border border-slate-300 rounded-xl focus:ring-4 focus:ring-green-500/20 focus:border-green-500 outline-none text-lg transition-all" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-semibold text-slate-700 mb-2">Chọn Chủ Đề:</label>
+                            <select value={themeId} onChange={(e) => setThemeId(e.target.value)} className="w-full p-4 border border-slate-300 rounded-xl outline-none focus:border-green-500 text-lg bg-white">
+                                <option value={1}>Chủ đề 1: Vùng đất tri thức</option>
+                                <option value={2}>Chủ đề 2: Khám phá khu vực kỳ thú</option>
+                                <option value={3}>Chủ đề 3: Khám phá thành phố</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-4 mb-4">
+                        <button onClick={() => { soundManager.playClick(); setTab('manual'); }} className={`flex-1 py-3 font-semibold rounded-xl transition-colors ${tab === 'manual' ? 'bg-green-600 text-white shadow-lg' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}>Thêm Thủ Công</button>
+                        <button onClick={() => { soundManager.playClick(); setTab('bulk'); }} className={`flex-1 py-3 font-semibold rounded-xl transition-colors ${tab === 'bulk' ? 'bg-green-600 text-white shadow-lg' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}>Thêm Hàng Loạt (AI Trắc Nghiệm)</button>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex-1">
+                        {tab === 'manual' ? (
+                            <div className="space-y-4">
+                                <div className="flex gap-4 items-end">
+                                    <div className="flex-1">
+                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Loại câu hỏi:</label>
+                                        <select value={qType} onChange={(e) => setQType(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-green-500">
+                                            <option value="trac_nghiem">Trắc nghiệm</option>
+                                            <option value="tu_luan">Tự luận</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="block text-sm font-semibold text-slate-700 mb-2">Thời gian trả lời:</label>
+                                        <select value={qTime} onChange={(e) => setQTime(Number(e.target.value))} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-green-500">
+                                            {TIME_LIMITS.map(t => (
+                                                <option key={t} value={t}>{t === 300 ? '5 phút' : `${t} giây`}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-slate-700 mb-2">Nội dung câu hỏi:</label>
+                                    <textarea value={qText} onChange={(e) => setQText(e.target.value)} rows="2" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-green-500" placeholder="Nhập câu hỏi..."></textarea>
+                                </div>
+
+                                {qType === 'trac_nghiem' ? (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        {options.map((opt, idx) => (
+                                            <div key={idx} className="flex items-center gap-2 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                                                <input type="radio" name="correctOpt" checked={correctOpt === idx} onChange={() => setCorrectOpt(idx)} className="w-5 h-5 text-green-600" />
+                                                <span className="font-bold text-slate-600">{String.fromCharCode(65 + idx)}.</span>
+                                                <input type="text" value={opt} onChange={(e) => {
+                                                    const newOpts = [...options];
+                                                    newOpts[idx] = e.target.value;
+                                                    setOptions(newOpts);
+                                                }} className="w-full p-2 bg-transparent outline-none border-b border-transparent focus:border-green-500" placeholder="Nhập đáp án..." />
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Đáp án đúng:</label>
+                                            <input type="text" value={qAnswer} onChange={(e) => setQAnswer(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-green-500" placeholder="Nhập kết quả..." />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-slate-700 mb-2">Gợi ý (Để trống AI sẽ tự tạo):</label>
+                                            <input type="text" value={qHint} onChange={(e) => setQHint(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:border-green-500" placeholder="Nhập gợi ý..." />
+                                        </div>
+                                    </div>
+                                )}
+
+                                <button onClick={handleAddManual} className="mt-4 w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors shadow">
+                                    Thêm Câu Hỏi
+                                </button>
+                            </div>
+                        ) : (
+                            <div>
+                                <div className="mb-4 text-sm bg-yellow-50 text-yellow-800 p-4 rounded-lg border border-yellow-200">
+                                    <p className="font-bold mb-1">Cú pháp bắt buộc (Mỗi dòng 1 câu):</p>
+                                    <code>Câu hỏi | Đáp án A# | Đáp án B | Đáp án C | Đáp án D</code>
+                                    <p className="mt-1 text-xs">* Thêm ký tự <strong>#</strong> vào ngay sau đáp án đúng.</p>
+                                </div>
+                                <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} rows="6" className="w-full p-4 border border-slate-300 rounded-xl outline-none focus:border-green-500 font-mono text-sm" placeholder="Ví dụ:&#10;Thủ đô nước Pháp? | Paris# | London | Berlin | Madrid"></textarea>
+                                {bulkError && <p className="text-red-500 text-sm mt-2 font-medium">{bulkError}</p>}
+                                <button onClick={handleAddBulk} className="mt-4 w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors shadow">
+                                    Xử Lý & Thêm Hàng Loạt
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex gap-4 mt-auto">
+                        <button onClick={() => { soundManager.playClick(); setShowBank(true); }} className="flex-1 py-4 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors shadow-lg">
+                            Xem Bộ Câu Hỏi ({questions.length})
+                        </button>
+                        <button onClick={handleSave} className="flex-1 py-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition-colors shadow-lg shadow-green-500/30 text-lg">
+                            Lưu Trò Chơi
+                        </button>
+                    </div>
+
+                    {showBank && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay">
+                            <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+                                <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                                    <h3 className="text-xl font-bold text-slate-800">Bộ câu hỏi đã tạo ({questions.length})</h3>
+                                    <button onClick={() => setShowBank(false)} className="text-slate-400 hover:text-red-500"><Icons.X /></button>
+                                </div>
+                                <div className="p-6 overflow-y-auto flex-1 space-y-4">
+                                    {questions.length === 0 ? <p className="text-center text-slate-500 italic">Chưa có câu hỏi nào.</p> : 
+                                     questions.map((q, idx) => (
+                                        <div key={q.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl relative">
+                                            <button onClick={() => setQuestions(questions.filter(item => item.id !== q.id))} className="absolute top-4 right-4 text-slate-400 hover:text-red-500"><Icons.X /></button>
+                                            <p className="font-bold text-slate-800 mb-2 pr-8">Câu {idx + 1}: {q.text}</p>
+                                            <div className="text-sm text-slate-600 mb-2">
+                                                <span className="inline-block bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-xs font-bold mr-2">{q.type === 'trac_nghiem' ? 'Trắc nghiệm' : 'Tự luận'}</span>
+                                                <span className="inline-block bg-orange-100 text-orange-700 px-2 py-1 rounded text-xs font-bold mr-2">{q.timeLimit}s</span>
+                                            </div>
+                                            {q.type === 'trac_nghiem' ? (
+                                                <div className="grid grid-cols-2 gap-2 text-sm">
+                                                    {q.options.map((opt, oIdx) => (
+                                                        <div key={oIdx} className={`p-2 rounded border ${q.correct === oIdx ? 'bg-green-100 border-green-300 font-bold text-green-800' : 'border-slate-200'}`}>
+                                                            {String.fromCharCode(65 + oIdx)}. {opt}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="text-sm bg-blue-50 border border-blue-100 p-3 rounded-lg text-blue-900">
+                                                    <p><strong>Đáp án:</strong> {q.answer}</p>
+                                                    <p className="mt-1"><strong>Gợi ý:</strong> {q.hint}</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                     ))
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const PlayGameView = ({ game, onExit }) => {
+            const containerRef = useRef(null);
+            const [charPos, setCharPos] = useState({ x: 50, y: 50 });
+            const [monsters, setMonsters] = useState([]);
+            const [score, setScore] = useState(0);
+            const [gameOver, setGameOver] = useState(false);
+            
+            const [activeMonster, setActiveMonster] = useState(null);
+            const [timeLeft, setTimeLeft] = useState(0);
+            const [timerActive, setTimerActive] = useState(false);
+            
+            const [essayInput, setEssayInput] = useState('');
+            const [showHint, setShowHint] = useState(false);
+
+            const currentTheme = THEMES[game.themeId || 1];
+
+            // Khởi tạo quái vật với emoji ngẫu nhiên từ danh sách bạn yêu cầu
+            useEffect(() => {
+                const initMonsters = game.questions.map((q, idx) => {
+                    const rx = 15 + Math.random() * 70; 
+                    const ry = 15 + Math.random() * 70;
+                    const randomEmoji = MONSTER_EMOJIS[Math.floor(Math.random() * MONSTER_EMOJIS.length)];
+                    return {
+                        id: 'm-' + idx,
+                        question: q,
+                        x: rx,
+                        y: ry,
+                        emoji: randomEmoji,
+                        defeated: false
+                    };
+                });
+                setMonsters(initMonsters);
+            }, [game]);
+
+            useEffect(() => {
+                let interval = null;
+                if (timerActive && timeLeft > 0) {
+                    interval = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
+                } else if (timerActive && timeLeft === 0) {
+                    handleTimeOut();
+                }
+                return () => clearInterval(interval);
+            }, [timerActive, timeLeft]);
+
+            const handleMapClick = (e) => {
+                if(activeMonster || gameOver) return; 
+                soundManager.playClick();
+                const rect = containerRef.current.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const clickY = e.clientY - rect.top;
+                
+                const percX = (clickX / rect.width) * 100;
+                const percY = (clickY / rect.height) * 100;
+
+                setCharPos({ x: percX, y: percY });
+            };
+
+            const handleMonsterClick = (e, monster) => {
+                e.stopPropagation();
+                if(activeMonster || gameOver || monster.defeated) return;
+
+                soundManager.playAttack();
+                setCharPos({ x: monster.x, y: monster.y });
+
+                setTimeout(() => {
+                    setActiveMonster(monster);
+                    setTimeLeft(monster.question.timeLimit);
+                    setTimerActive(true);
+                    setEssayInput('');
+                    setShowHint(false);
+                }, 800);
+            };
+
+            const handleAnswerSubmit = (isCorrect) => {
+                setTimerActive(false);
+                if (isCorrect) {
+                    soundManager.playCorrect();
+                    setScore(prev => prev + 1);
+                    setMonsters(prev => prev.map(m => m.id === activeMonster.id ? { ...m, defeated: true } : m));
+                } else {
+                    soundManager.playWrong();
+                    alert("Sai mất rồi! Quái vật phản công.");
+                    setMonsters(prev => prev.map(m => m.id === activeMonster.id ? { ...m, defeated: true } : m));
+                }
+                
+                setActiveMonster(null);
+                checkWinCondition();
+            };
+
+            const handleTimeOut = () => {
+                setTimerActive(false);
+                soundManager.playWrong();
+                alert("Hết giờ! Quái vật đã đánh bại bạn ở câu hỏi này.");
+                setMonsters(prev => prev.map(m => m.id === activeMonster.id ? { ...m, defeated: true } : m));
+                setActiveMonster(null);
+                checkWinCondition();
+            };
+
+            const checkWinCondition = () => {
+                setTimeout(() => {
+                    setMonsters(currentMonsters => {
+                        if(currentMonsters.every(m => m.defeated)) {
+                            soundManager.playWin();
+                            setGameOver(true);
+                        }
+                        return currentMonsters;
+                    });
+                }, 100);
+            };
+
+            return (
+                <div className="flex flex-col h-full bg-slate-900 rounded-2xl overflow-hidden relative shadow-2xl ring-4 ring-slate-800">
+                    <div className="absolute top-0 left-0 right-0 z-20 p-4 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent">
+                        <div>
+                            <h2 className="text-xl font-bold text-white tracking-wide">{game.title}</h2>
+                            <p className="text-xs text-green-400 font-medium">{currentTheme.name}</p>
+                        </div>
+                        <div className="flex gap-6 items-center">
+                            <div className="bg-slate-800/80 px-4 py-2 rounded-full border border-slate-600 text-white font-bold flex items-center gap-2">
+                                <Icons.Sword /> Điểm: {score}/{game.questions.length}
+                            </div>
+                            <button onClick={() => { soundManager.playClick(); onExit(); }} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-full font-bold transition">Thoát</button>
+                        </div>
+                    </div>
+
+                    <div 
+                        ref={containerRef}
+                        className="flex-1 relative cursor-crosshair overflow-hidden" 
+                        style={{
+                            backgroundImage: `url('${currentTheme.map}')`,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center',
+                        }}
+                        onClick={handleMapClick}
+                    >
+                        <div 
+                            className="character absolute w-12 h-16 transform -translate-x-1/2 -translate-y-full"
+                            style={{ 
+                                left: `${charPos.x}%`, 
+                                top: `${charPos.y}%`,
+                                backgroundImage: `url('${currentTheme.char}')`,
+                                backgroundSize: 'contain',
+                                backgroundRepeat: 'no-repeat',
+                                backgroundPosition: 'bottom center'
+                            }}
+                        >
+                            <div className="absolute bottom-0 left-1/2 w-8 h-2 bg-black/40 rounded-full transform -translate-x-1/2 blur-[2px] -z-10"></div>
+                        </div>
+
+                        {monsters.map(m => !m.defeated && (
+                            <div 
+                                key={m.id}
+                                className="monster absolute w-14 h-14 transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center text-3xl bg-red-900/40 rounded-full hover:bg-red-500/50 shadow-lg border border-red-500/50 transition-transform"
+                                style={{ left: `${m.x}%`, top: `${m.y}%` }}
+                                onClick={(e) => handleMonsterClick(e, m)}
+                                title="Nhấp để tấn công quái vật!"
+                            >
+                                {m.emoji}
+                            </div>
+                        ))}
+                    </div>
+
+                    {activeMonster && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay">
+                            <div className="bg-white w-full max-w-xl rounded-3xl shadow-2xl overflow-hidden transform scale-100 transition-transform">
+                                <div className="bg-red-600 p-6 text-white text-center relative">
+                                    <h3 className="text-2xl font-black uppercase tracking-wider flex items-center justify-center gap-3">
+                                        <span className="text-3xl">{activeMonster.emoji}</span> Giao Tranh Với Quái Vật
+                                    </h3>
+                                    <div className="absolute right-6 top-1/2 transform -translate-y-1/2 bg-red-900/50 px-4 py-2 rounded-full font-mono font-bold text-xl ring-2 ring-red-400">
+                                        {timeLeft}s
+                                    </div>
+                                </div>
+                                <div className="p-8">
+                                    <p className="text-xl font-bold text-slate-800 mb-6 text-center leading-relaxed">
+                                        {activeMonster.question.text}
+                                    </p>
+
+                                    {activeMonster.question.type === 'trac_nghiem' ? (
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            {activeMonster.question.options.map((opt, idx) => (
+                                                <button 
+                                                    key={idx}
+                                                    onClick={() => handleAnswerSubmit(idx === activeMonster.question.correct)}
+                                                    className="p-4 rounded-xl border-2 border-slate-200 hover:border-red-500 hover:bg-red-50 text-left font-semibold text-slate-700 transition-all active:scale-95 shadow-sm"
+                                                >
+                                                    <span className="inline-block bg-slate-200 text-slate-600 w-8 h-8 rounded-full text-center leading-8 mr-3 font-bold">
+                                                        {String.fromCharCode(65 + idx)}
+                                                    </span>
+                                                    {opt}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <input 
+                                                type="text" 
+                                                value={essayInput} 
+                                                onChange={(e) => setEssayInput(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if(e.key === 'Enter') handleAnswerSubmit(essayInput.trim().toLowerCase() === activeMonster.question.answer.toLowerCase());
+                                                }}
+                                                className="w-full p-4 border-2 border-slate-300 rounded-xl outline-none focus:border-red-500 text-lg text-center font-semibold"
+                                                placeholder="Nhập câu trả lời của bạn..."
+                                                autoFocus
+                                            />
+                                            {showHint ? (
+                                                <div className="bg-yellow-50 text-yellow-800 p-4 rounded-xl border border-yellow-200 text-sm italic">
+                                                    {activeMonster.question.hint}
+                                                </div>
+                                            ) : (
+                                                <button onClick={() => { soundManager.playClick(); setShowHint(true); }} className="text-sm text-indigo-600 font-bold hover:underline">
+                                                    Xem gợi ý từ AI
+                                                </button>
+                                            )}
+                                            <button 
+                                                onClick={() => handleAnswerSubmit(essayInput.trim().toLowerCase() === activeMonster.question.answer.toLowerCase())}
+                                                className="w-full py-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-lg transition-colors shadow-lg"
+                                            >
+                                                Tấn Công!
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {gameOver && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay">
+                            <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8 text-center transform scale-110">
+                                <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6 text-green-600 shadow-inner">
+                                    <Icons.Sword />
+                                </div>
+                                <h2 className="text-3xl font-black text-slate-800 mb-2">CHIẾN THẮNG HUYỀN THOẠI</h2>
+                                <p className="text-slate-600 mb-8 text-lg">Bạn đã tiêu diệt hoàn toàn quái vật với số điểm tuyệt đối <span className="font-bold text-green-600 text-2xl">{score}</span> / {game.questions.length}!</p>
+                                <button onClick={() => { soundManager.playClick(); onExit(); }} className="w-full py-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl text-lg transition-colors shadow-lg shadow-green-500/30">
+                                    Quay Lại Trang Chủ
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [view, setView] = useState('home'); 
+            const [games, setGames] = useState([SAMPLE_GAME]);
+            const [activeGame, setActiveGame] = useState(null);
+
+            const handleSaveNewGame = (newGame) => {
+                const updatedGames = games.filter(g => !g.isSample);
+                setGames([newGame, ...updatedGames]);
+                setView('home');
+                alert("Đã lưu trò chơi mới thành công!");
+            };
+
+            const handlePlayGame = (game) => {
+                soundManager.playClick();
+                setActiveGame(game);
+                setView('play');
+            };
+
+            return (
+                <div className="flex h-screen w-screen p-4 gap-4">
+                    <div className="w-72 bg-white/95 backdrop-blur rounded-3xl shadow-xl flex flex-col overflow-hidden relative">
+                        <div className="p-6 bg-slate-800 text-center">
+                            <div className="w-16 h-16 mx-auto bg-green-500 rounded-full flex items-center justify-center mb-3 shadow-inner text-white">
+                                <Icons.Sword />
+                            </div>
+                            <h1 className="text-xl font-black text-white uppercase tracking-widest leading-tight">
+                                Tiêu Diệt<br/><span className="text-green-400">Quái Vật</span>
+                            </h1>
+                        </div>
+
+                        <div className="flex-1 p-4 flex flex-col gap-3">
+                            <button onClick={() => { soundManager.playClick(); setView('home'); }} className={`flex items-center gap-3 p-4 rounded-2xl font-bold transition-all ${view === 'home' ? 'bg-green-100 text-green-800' : 'text-slate-600 hover:bg-slate-100'}`}>
+                                <Icons.Home /> Trang chủ
+                            </button>
+                            <button onClick={() => { soundManager.playClick(); setView('create'); }} className={`flex items-center gap-3 p-4 rounded-2xl font-bold transition-all ${view === 'create' ? 'bg-green-100 text-green-800' : 'text-slate-600 hover:bg-slate-100'}`}>
+                                <Icons.Plus /> Tạo trò chơi mới
+                            </button>
+                            <button onClick={() => { soundManager.playClick(); setView('instructions'); }} className={`flex items-center gap-3 p-4 rounded-2xl font-bold transition-all ${view === 'instructions' ? 'bg-green-100 text-green-800' : 'text-slate-600 hover:bg-slate-100'}`}>
+                                <Icons.Book /> Hướng dẫn
+                            </button>
+                        </div>
+                        
+                        <div className="p-4 text-center text-xs text-slate-400 font-medium">
+                            Phiên bản 2.0.0 (Audio & Themes)
+                        </div>
+                    </div>
+
+                    <div className="flex-1 bg-white rounded-[2rem] shadow-2xl relative overflow-hidden flex flex-col">
+                        {view === 'home' && (
+                            <div className="p-8 h-full overflow-y-auto bg-slate-50">
+                                <h2 className="text-3xl font-black text-slate-800 mb-8 border-b-4 border-green-500 pb-4 inline-block">Chọn Trò Chơi</h2>
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                                    {games.map(game => {
+                                        const themeInfo = THEMES[game.themeId || 1];
+                                        return (
+                                            <div key={game.id} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 hover:shadow-xl transition-all group flex flex-col">
+                                                <div className="w-12 h-12 bg-indigo-100 rounded-2xl flex items-center justify-center mb-4 text-indigo-600 group-hover:scale-110 transition-transform">
+                                                    <Icons.Play />
+                                                </div>
+                                                <h3 className="text-xl font-bold text-slate-800 mb-1 line-clamp-2">{game.title}</h3>
+                                                <p className="text-xs font-semibold text-green-600 mb-2">{themeInfo.name}</p>
+                                                <p className="text-slate-500 mb-6 font-medium text-sm">{game.questions.length} câu hỏi</p>
+                                                <button onClick={() => handlePlayGame(game)} className="mt-auto w-full py-3 bg-slate-100 hover:bg-green-500 hover:text-white text-slate-700 font-bold rounded-xl transition-colors shadow-sm">
+                                                    Bắt đầu chơi
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                    
+                                    <div onClick={() => { soundManager.playClick(); setView('create'); }} className="bg-slate-50 p-6 rounded-3xl border-2 border-dashed border-slate-300 hover:border-green-500 hover:bg-green-50 transition-colors cursor-pointer flex flex-col items-center justify-center text-center min-h-[220px] group">
+                                        <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center mb-3 text-slate-500 group-hover:bg-green-200 group-hover:text-green-700 transition-colors">
+                                            <Icons.Plus />
+                                        </div>
+                                        <h3 className="font-bold text-slate-600 group-hover:text-green-700">Tạo trò chơi mới</h3>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'create' && <CreateGameView onSave={handleSaveNewGame} />}
+                        
+                        {view === 'play' && activeGame && <PlayGameView game={activeGame} onExit={() => setView('home')} />}
+
+                        {view === 'instructions' && (
+                            <div className="p-8 h-full overflow-y-auto bg-slate-50">
+                                <h2 className="text-3xl font-black text-slate-800 mb-8 border-b-4 border-green-500 pb-4 inline-block">Hướng dẫn sử dụng</h2>
+                                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 prose max-w-none text-slate-700 space-y-6">
+                                    <div>
+                                        <h3 className="text-xl font-bold text-indigo-600 mb-2">1. Tính năng Chủ đề & Âm thanh mới</h3>
+                                        <p>Khi tạo trò chơi mới, bạn có thể chọn một trong 3 chủ đề độc đáo với các bản đồ và nhân vật khác nhau. Trò chơi cũng đã được tích hợp âm thanh tương tác trực tiếp khi nhấn nút, khi tấn công quái vật và khi thắng trận.</p>
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-bold text-indigo-600 mb-2">2. Cách tạo trò chơi & Cú pháp hàng loạt</h3>
+                                        <p>Bạn có thể nhập câu hỏi trắc nghiệm hàng loạt bằng cú pháp:</p>
+                                        <code className="block bg-slate-100 p-3 rounded-lg font-mono my-2 text-sm">Câu hỏi | Đáp án A# | Đáp án B | Đáp án C | Đáp án D</code>
+                                        <p className="text-xs text-slate-500">Thêm dấu <strong>#</strong> vào ngay sau đáp án đúng để hệ thống tự nhận diện.</p>
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-bold text-indigo-600 mb-2">3. Luật chơi</h3>
+                                        <p>Nhấp chuột trên bản đồ để di chuyển nhân vật đến các vị trí khác nhau. Nhấp trực tiếp vào các biểu tượng quái vật (emoji ngẫu nhiên) để chiến đấu, trả lời đúng các câu hỏi trước khi hết giờ để giành chiến thắng!</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
